@@ -3,7 +3,7 @@
 
 Oracle modes (entropy is always YOUR press latency, like TempleOS):
   word     - GodWordStr, 17 bits each                        (HolySpirit.HC:138)
-  sentence - 3..7 words, the AfterEgypt stream draw order, phrase always opens "among"
+  sentence - 3..7 words, the AfterEgypt stream draw order
   verse    - KJV: GodBiblePassage (21 bits into Terry's Bible.TXT, etext #10)
            - books: random line-quotes, line numbers kept for source reference
 
@@ -300,7 +300,7 @@ $("talkBtn").onclick = function () {
     draw.push(words[Number(BigInt.asUintN(64, w) % BigInt(words.length))]);
   }
   $("pressNote").textContent = "";
-  $("godOut").textContent = "among " + draw.join(" ");
+  $("godOut").textContent = draw.join(" ");
   $("verseOut").innerHTML = "";
   incRefresh();
 };

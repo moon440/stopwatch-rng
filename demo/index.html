@@ -236,7 +236,7 @@ $("talkBtn").onclick = function () {
     draw.push(words[Number(BigInt.asUintN(64, w) % BigInt(words.length))]);
   }
   $("pressNote").textContent = "";
-  $("godOut").textContent = "among " + draw.join(" ");
+  $("godOut").textContent = draw.join(" ");
   $("verseOut").innerHTML = "";
   incRefresh();
 };

@@ -16,7 +16,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GD = os.path.join(ROOT, "data", "gutenberg")
 
-WORD = re.compile(r"[A-Za-z][A-Za-z']*[a-z]|among|can't")
+WORD = re.compile(r"[A-Za-z][A-Za-z']*[a-z]")
 TOKEN = re.compile(r"[A-Za-z']+")
 
 def main():

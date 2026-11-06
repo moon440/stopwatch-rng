@@ -22,7 +22,7 @@ or the plain King James Bible, one to four verses per blow, in Terry's own Misc/
 |---|---|
 | `src/templeos_rng.zig` | The generator: Kernel `Rand` (LCG + TSC fold, `Seed(n)`/`Seed(0)` modes) and the `god` oracle bit-FIFO, in Zig. |
 | `build/wasm/templeos_rng.wasm` | Built artifact (not committed; produced by `tools/build.ps1`; 968 bytes). |
-| `demo/index.html` | The interactive demo: seed, draw, then consult the oracle — a word (17 bits), an AfterEgypt-style 3–7 word glossolalia burst always opening "among", or verses from the King James Bible (1–4 at a time, or random) plus quotable lines from the attached Gutenberg books with line-numbered citations. Green TempleOS terminal, zero dependencies. |
+| `demo/index.html` | The interactive demo: seed, draw, then consult the oracle — a word (17 bits), an AfterEgypt-style 3–7 word glossolalia burst, or verses from the King James Bible (1–4 at a time, or random) plus quotable lines from the attached Gutenberg books with line-numbered citations. Green TempleOS terminal, zero dependencies. |
 | `data/vocab.txt` | `Adam/God/Vocab.DD` from TempleOS, unchanged. |
 | `data/gutenberg/` | Gutenberg corpus: original files for reference, one minimal wordlist (`pg<id>_vocab.txt`) and quotable-line samples per work (`pg<id>_quotes.json` with original line numbers), `index.tsv`, and `bible_kjv.txt` (etext #10, the exact Bible Terry shipped). License, author and Gutenberg number of each work are recorded; all are public domain in the US. |
 | `tools/build.ps1` | Zig `build-exe` to `wasm32-freestanding`, `ReleaseSmall`. No bundler. |
