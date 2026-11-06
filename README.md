@@ -11,16 +11,24 @@ whose entropy is the latency of the user's own keystrokes. This repository carri
 transcribed operation-for-operation from the TempleOS source archive and proven against
 that transcription by tests.
 
+The oracle's wordlists rotate: the default source is Terry's KJV vocabulary; every
+Gutenberg book shipped here carries its own minimal list and quotable-line sample so the
+oracle speaks Plato, the Bhagavad Gītā, Pistis Sophia, Marcus Aurelius or Augustine —
+or the plain King James Bible, one to four verses per blow, in Terry's own Misc/Bible.TXT.
+
 ## What is in here
 
 | Path | What |
 |---|---|
 | `src/templeos_rng.zig` | The generator: Kernel `Rand` (LCG + TSC fold, `Seed(n)`/`Seed(0)` modes) and the `god` oracle bit-FIFO, in Zig. |
-| `build/wasm/templeos_rng.wasm` | Built artifact (committed? no - built by `tools/build.ps1`; 968 bytes). |
-| `demo/index.html` | The interactive demo: seed the generator, draw numbers, bank press-latency bits into the oracle's FIFO, ask for words from the King-James vocabulary Terry shipped. |
+| `build/wasm/templeos_rng.wasm` | Built artifact (not committed; produced by `tools/build.ps1`; 968 bytes). |
+| `demo/index.html` | The interactive demo: seed, draw, then consult the oracle — a word (17 bits), an AfterEgypt-style 3–7 word glossolalia burst always opening "among", or verses from the King James Bible (1–4 at a time, or random) plus quotable lines from the attached Gutenberg books with line-numbered citations. Green TempleOS terminal, zero dependencies. |
 | `data/vocab.txt` | `Adam/God/Vocab.DD` from TempleOS, unchanged. |
+| `data/gutenberg/` | Gutenberg corpus: original files for reference, one minimal wordlist (`pg<id>_vocab.txt`) and quotable-line samples per work (`pg<id>_quotes.json` with original line numbers), `index.tsv`, and `bible_kjv.txt` (etext #10, the exact Bible Terry shipped). License, author and Gutenberg number of each work are recorded; all are public domain in the US. |
 | `tools/build.ps1` | Zig `build-exe` to `wasm32-freestanding`, `ReleaseSmall`. No bundler. |
-| `tools/pack_demo.py` | Embeds the wasm (base64) and the word list into `demo/index.html`. |
+| `tools/build_vocabs.py` | Builds the minimal wordlists from the Gutenberg files. Deterministic, stdlib only. |
+| `tools/build_quotes.py` | Picks quotable lines from the books, keeping line numbers. Allows a scripture-mode from any book. |
+| `tools/pack_demo.py` | Embeds wasm + wordlists + quotable lines + the KJV into `demo/index.html`. |
 | `test/test_tsr.js` | Self test in pure Node: exact-HolyC LCG step-by-step comparison, Seed modes, oracle FIFO order and capacity. |
 
 ## Running the demo

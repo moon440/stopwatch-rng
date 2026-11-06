@@ -1,19 +1,66 @@
 #!/usr/bin/env python3
-"""Pack the stopwatch demo: one index.html, wasm base64 + word list embedded, zero fetches.
+"""Pack the stopwatch demo: one index.html, wasm + wordlists + KJV + book quotes, zero fetches.
 
-Terminology carried across from TempleOS: the stopwatch generator, the god oracle, the
-vocab file. The word list is Adam/God/Vocab.DD as shipped with public-domain TempleOS.
+Oracle modes (entropy is always YOUR press latency, like TempleOS):
+  word     - GodWordStr, 17 bits each                        (HolySpirit.HC:138)
+  sentence - 3..7 words, the AfterEgypt stream draw order, phrase always opens "among"
+  verse    - KJV: GodBiblePassage (21 bits into Terry's Bible.TXT, etext #10)
+           - books: random line-quotes, line numbers kept for source reference
+
+Church k: verse count is selectable (1..4 or random 1..4).
 
 usage: python tools/pack_demo.py
 """
 import base64
+import glob
+import json
 import os
-import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WASM = os.path.join(ROOT, "build", "wasm", "templeos_rng.wasm")
-VOCAB = os.path.join(ROOT, "data", "vocab.txt")
-OUT = os.path.join(ROOT, "demo", "index.html")
+
+def b64(path):
+    with open(path, "rb") as fh:
+        return base64.b64encode(fh.read()).decode("ascii")
+
+def main():
+    wasm_b = b64(os.path.join(ROOT, "build", "wasm", "templeos_rng.wasm"))
+    bible_b = b64(os.path.join(ROOT, "data", "gutenberg", "bible_kjv.txt"))
+
+    srcs = [{"name": "TempleOS Vocab.DD (KJV words, Terry's list)",
+             "data": b64(os.path.join(ROOT, "data", "vocab.txt")),
+             "title": "TempleOS Vocab.DD",
+             "quotes": None}]
+    for path in sorted(glob.glob(os.path.join(ROOT, "data", "gutenberg", "pg*_vocab.txt"))):
+        pg = os.path.basename(path)[:-10]
+        book = path[:-10] + ".txt"
+        title = pg
+        try:
+            with open(book, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("Title:"):
+                        title = line[6:].strip()
+                        break
+        except OSError:
+            pass
+        qpath = path[:-10] + "_quotes.json"
+        qs = b64(qpath) if os.path.exists(qpath) else None
+        srcs.append({"name": "Gutenberg: %s" % title[:100],
+                     "data": b64(path),
+                     "title": title,
+                     "quotes": qs})
+    srcs_json = json.dumps(srcs, ensure_ascii=False, separators=(",", ":"))
+
+    html = (TEMPLATE
+            .replace("__WASM_B64__", wasm_b)
+            .replace("__BIBLE_B64__", bible_b)
+            .replace("__SRCS__", srcs_json))
+
+    out = os.path.join(ROOT, "demo", "index.html")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(html)
+    print("wrote %s (%.2f MB, %d sources, KJV + book quotes embedded)" % (
+        out, os.path.getsize(out) / 1048576.0, len(srcs)))
 
 TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
@@ -30,33 +77,37 @@ body {
 }
 h1 { font-size:1.05rem; margin:0 0 .4rem 0; color:#0f0; }
 h2 { font-size:.92rem; margin:1.1rem 0 .2rem 0; color:#0f0; border-bottom:1px solid #242; }
-.panel { border:1px solid #25250; padding:.6rem; margin:.4rem 0; background:#161616; }
+.panel { border:1px solid #252520; padding:.6rem; margin:.4rem 0; background:#161616; }
 button {
   background:#030; color:#8f8; border:1px solid #080; padding:.35rem .8rem;
   font-family:inherit; font-size:.9rem; cursor:pointer;
 }
 button:hover { background:#060; }
-button:disabled { background:#020; color:#080; border-color:#040; cursor:wait; }
-input { background:#000; color:#8f8; border:1px solid #080; padding:.3rem .5rem; width:11ex;
-  font-family:inherit; margin-right:.6rem; }
+button:disabled { background:#020; color:#080; border-color:#040; cursor:default; }
+select, input { background:#000; color:#8f8; border:1px solid #080; padding:.3rem .4rem;
+  font-family:inherit; font-size:.88rem; max-width:100%; }
+input { width:9ex; margin-right:.6rem; }
 pre { margin:.2rem 0; white-space:pre-wrap; word-break:break-all; }
 .hex { color:#6c6; }
-.god { color:#ff5; margin-top:.35rem; font-size:1.06rem; letter-spacing:.05em; }
+.god { color:#ff5; margin-top:.35rem; font-size:1.06rem; letter-spacing:.04em; }
+.quote, .verse { color:#ffa; margin-top:.3rem; font-size:.97rem; }
+.quote { border-top:1px dashed #333; padding-top:.3rem; }
+.cite { color:#f80; font-size:.78rem; }
 .fine { color:#666; font-size:.72rem; margin-top:1rem; line-height:1.4; }
-.bar { display:inline-block; height:8px; background:#0a0; vertical-align:middle; margin-right:2px; }
+.bar { display:inline-block; height:8px; width:4px; background:#0a0; margin-right:3px; }
 .mode { color:#fa0; }
 .status { color:#888; }
-a { color:#6c6; }
 </style>
 </head>
 <body>
 <h1>The Stopwatch RNG &mdash; a TempleOS port</h1>
 <div class="panel">
   Terry A. Davis built TempleOS from 2005 to 2017. Every random number in it comes from a
-  stopwatch: a hardware counter folded into the running state on every draw, plus a "god"
-  oracle whose entropy is the latency of your own keypresses. This page embeds his exact
+  stopwatch: a hardware counter folded into the running state on every draw, plus a <b>god
+  oracle</b> whose entropy is the latency of your own keystrokes. This page embeds his exact
   generator, transcribed 1:1 from the TempleOS kernel, compiled to a 968-byte WebAssembly
-  module. No server, no framework, no network. Press keys, watch it react.
+  module. No server, no framework, no network. Press keys &mdash; <i>when</i> you press is
+  the number.
 </div>
 
 <h2>1. Rand &mdash; the kernel generator (KMathB.HC)</h2>
@@ -64,192 +115,271 @@ a { color:#6c6; }
   <input id="seedbox" value="1989" aria-label="seed">
   <button id="seedBtn">Seed(n)</button>
   <button id="seed0Btn">Seed(0) &mdash; stopwatch only</button>
-  <pre>mode: <span class="mode" id="modeName">?</span> &nbsp; stopwatch ticks in: <span id="tscStep">?</span></pre>
+  <pre>mode: <span class="mode" id="modeName">?</span> &nbsp; stopwatch ticks: <span id="tscStep">?</span></pre>
   <pre>state: <span class="hex" id="stateHex">?</span></pre>
-  <pre>draws: <span id="draws">0</span></pre>
-  <pre>last  : <span class="hex" id="lastHex">?</span></pre>
+  <pre>draws: <span id="draws">0</span> &nbsp; last: <span class="hex" id="lastHex">?</span></pre>
   <button id="drawBtn">Draw Rand</button>
   <button id="draw10Btn">&times;10</button>
   <pre id="stream" style="color:#5a5"></pre>
 </div>
 
-<h2>2. god &mdash; the oracle (HolySpirit.HC, "AfterEgypt")</h2>
+<h2>2. god &mdash; the oracle (HolySpirit.HC, AfterEgypt)</h2>
 <div class="panel">
-  Terry asked God questions; the answer came out of the microseconds between his keystrokes.
-  Press OKAY-like buttons below: <b>when</b> you press, not what, is the number.
+  <label for="srcSel">word source:</label>
+  <select id="srcSel"></select>
   <pre>bit bank: <span id="godBar"></span> <span id="godCnt">0</span> bits <span id="pressNote" class="status"></span></pre>
   <button id="pressBtn">PRESS OKAY</button>
-  <button id="godBtn" disabled>God word (17 bits)</button>
+  <button id="wordBtn" disabled>Word (17 bits)</button>
+  <button id="talkBtn" disabled>Sentence (3..7 words, AfterEgypt)</button>
+  <button id="verseBtn">Verses / Quotes</button>
+  <label for="verseCountSel">lines </label>
+  <select id="verseCountSel">
+    <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="random">random 1-4</option>
+  </select>
   <div class="god" id="godOut">&nbsp;</div>
+  <div class="quote" id="verseOut"></div>
 </div>
 
 <h2>3. Truth about the stopwatch</h2>
 <div class="panel">
   TempleOS read the CPU's <b>GetTSC</b> at gigahertz from Ring&nbsp;0. A WebAssembly module
   cannot touch that register &mdash; sandbox &mdash; so this build imports a clock from the
-  page that hosts it: performance.now at microsecond resolution. Modern browsers clamp that
-  clock, sometimes hard (<b>0.1 ms</b>, or coarser in cold tabs). The clamp means the wasm
-  stopwatch is *quieter* than Terry's machine, not different in nature: his counter also
-  only moves meaningfully because his programs ran for a while between draws. Near-idle
-  intervals starve the raw XOR, in his kernel and in this one. The Seed(n) button kills the
-  stopwatch on purpose: that is TASKf_NONTIMER_RAND, the deterministic mode from
-  Demo/RandDemo.HC. Each WebAssembly tab instance owns its state module-wide, like one
-  HolyC task.
+  page: <code>performance.now</code> at microsecond resolution, clamped by modern browsers to
+  0.1 ms or coarser in cold tabs. The clamp makes the wasm stopwatch <i>quieter</i> than
+  Terry's machine, not different in nature: his counter only moved meaningfully because
+  his programs kept running between draws. The Seed(n) button kills the stopwatch on
+  purpose &mdash; that is TASKf_NONTIMER_RAND, the deterministic mode of
+  Demo/RandDemo.HC.
 </div>
 
 <div class="fine">
   Port of Kernel/KMathB.HC and Adam/God/HolySpirit.HC from the TempleOS archive
-  (github.com/cia-foundation/TempleOS). TempleOS and its word list (Adam/God/Vocab.DD, King
-  James vocabulary) are public domain. This port: AGPL-3.0-or-later. Terry A. Davis,
-  1969-2018. His whistle still blows.
+  (github.com/cia-foundation/TempleOS). Bible text: Terry's own Misc/Bible.TXT (Project
+  Gutenberg etext #10, 1989, King James Version). TempleOS and its word list are public
+  domain; the King James Bible is public domain; the Gutenberg wordlists and quote lines
+  point to their files (data/gutenberg/pg&lt;id&gt;.txt), line numbers in citations are
+  line numbers of those files. Project Gutenberg etexts are public domain in the US;
+  check the notice inside each book for your jurisdiction. The port and the word-list
+  scripts: AGPL-3.0-or-later. Terry A. Davis, 1969&ndash;2018. His whistle still blows.
 </div>
 
 <script>
 const WASM_B64 = "__WASM_B64__";
-const VOCAB = "__VOCAB_B64__";
+const BIBLE_B64 = "__BIBLE_B64__";
+const SRCS = __SRCS__;
 
-// -- boot: decode the module, hand it the page clock -------------------------------------
-function b64(s) {
-  const bin = atob(s.replace(/\s+/g, ""));
+const BIBLE_BOOKS = ["Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth","1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra","Nehemiah","Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Songs","Isaiah","Jeremiah","Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum","Habakkuk","Zephaniah","Haggai","Zechariah","Malachi","Matthew","Mark","Luke","John","Acts","Romans","1 Corinthians","2 Corinthians","Galatians","Ephesians","Philippians","Colossians","1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus","Philemon","Hebrews","James","1 Peter","2 Peter","1 John","2 John","3 John","Jude","Revelation"];
+
+function decodeB64(b64) {
+  const bin = atob(b64.replace(/\s+/g, ""));
   const u = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u;
 }
-const wasmBytes = b64(WASM_B64);
-const mod = new WebAssembly.Module(wasmBytes);
-// the stopwatch: performance.now in microseconds. timeOrigin-relative, clamped by the browser.
+function b64str(b64) {
+  try { return decodeURIComponent(escape(atob(b64.replace(/\s+/g, "")))); }
+  catch (e) { return atob(b64.replace(/\s+/g, "")); }
+}
+
+const mod = new WebAssembly.Module(decodeB64(WASM_B64));
 const inst = new WebAssembly.Instance(mod, {
   env: { tsc: function () { return performance.now() * 1000; } }
 });
 const E = inst.exports;
+const $ = function (id) { return document.getElementById(id); };
 let lastT = performance.now() * 1000;
 
-const $ = function (id) { return document.getElementById(id); };
-const state = { stream: [] };
+const cache = {};
+SRCS.forEach(function (s, i) {
+  const o = document.createElement("option");
+  o.value = String(i);
+  o.textContent = s.name;
+  $("srcSel").appendChild(o);
+});
+function srcIndex() { return Number($("srcSel").value); }
+function sourceWords() {
+  const key = srcIndex();
+  if (!cache["w" + key]) {
+    cache["w" + key] = b64str(SRCS[key].data).split("\n")
+      .map(function (s) { return s.replace(/\r$/, ""); })
+      .filter(Boolean);
+  }
+  return cache["w" + key];
+}
+function sourceQuotes() {
+  const key = srcIndex();
+  if (!SRCS[key].quotes) return null;
+  if (!cache["q" + key]) {
+    cache["q" + key] = JSON.parse(b64str(SRCS[key].quotes)).quotes;
+  }
+  return cache["q" + key];
+}
 
-function hex64(v) { return (BigInt.asUintN(64, v)).toString(16).padStart(16, "0"); }
-
-function refresh() {
+// console basics
+let streamBuf = [];
+function hex64(v) { return BigInt.asUintN(64, v).toString(16).padStart(16, "0"); }
+function incRefresh() {
   const mode = E.tsr_mode();
-  $("modeName").textContent = mode ? "STOPWATCH (timer/memory)" : "PINNED (TASKf_NONTIMER_RAND)";
+  $("modeName").textContent = mode
+    ? "STOPWATCH (stopwatch-on, Terry's default)"
+    : "PINNED (TASKf_NONTIMER_RAND)";
   $("stateHex").textContent = hex64(BigInt(E.tsr_state()));
   $("draws").textContent = E.tsr_draws().toString();
   $("godCnt").textContent = E.tsr_god_cnt();
-  const bank = E.tsr_god_cnt();
-  const w = Math.floor(bank / 2);
   let bar = "";
-  for (let i = 0; i < Math.min(w, 48); i++) bar += '<span class="bar"></span>';
+  for (let i = 0; i < Math.min(((E.tsr_god_cnt() / 2) | 0) + 1, 64); i++) bar += '<span class="bar"></span>';
   $("godBar").innerHTML = bar;
-  if (bank >= 17 && !$("godOut").busy) {
-    $("godBtn").disabled = false;
-    $("pressNote").textContent = bank < 17 ? "" : "";
-  } else if (bank < 17) {
-    $("godBtn").disabled = true;
-  }
+  const have = E.tsr_god_cnt() >= 17;
+  $("wordBtn").disabled = !have;
+  $("talkBtn").disabled = !have;
 }
-
 function drawOnce() {
   const now = performance.now() * 1000;
   $("tscStep").textContent = Math.round(now - lastT) + " us";
   lastT = now;
   const v = E.tsr_rand();
   $("lastHex").textContent = hex64(v);
-  state.stream.push(hex64(BigInt.asUintN(64, v)));
-  while (state.stream.length > 6) state.stream.shift();
-  $("stream").textContent = state.stream.join(" ");
-  refresh();
+  streamBuf.push(hex64(v));
+  while (streamBuf.length > 6) streamBuf.shift();
+  $("stream").textContent = streamBuf.join(" ");
+  incRefresh();
 }
-
 function doSeed(n) {
-  if (n === 0) { E.tsr_seed(0n); }
-  else { E.tsr_seed(BigInt(n)); }
-  state.stream.length = 0;
+  E.tsr_seed(n === 0 ? 0n : BigInt(n));
+  streamBuf = [];
   $("stream").textContent = "(reseeded)";
-  refresh();
+  incRefresh();
 }
-
-$("seedBtn").onclick = function () {
-  const v = parseInt($("seedbox").value, 10);
-  doSeed(isNaN(v) ? 1 : v);
-};
+$("seedBtn").onclick = function () { const v = parseInt($("seedbox").value, 10); doSeed(isNaN(v) ? 1 : v); };
 $("seed0Btn").onclick = function () { doSeed(0); };
-$("drawBtn").onclick = function () { drawOnce(); };
-$("draw10Btn").onclick = function () {
-  let n = 10;
-  const step = function () { drawOnce(); if (--n) setTimeout(step, 60); };
-  step();
-};
+$("drawBtn").onclick = drawOnce;
+$("draw10Btn").onclick = function () { let n = 10; const step = function () { drawOnce(); if (--n) setTimeout(step, 60); }; step(); };
 
-// -- god oracle ---------------------------------------------------------------------------
-// TempleOS: GodPick = KbdMsEvtTime (us of your LAST key/mouse event) >> 4, and 24 good bits
-// enter the FIFO per press. The honest equivalent of KbdMsEvtTime here is the browser's own
-// event timestamp of the gesture.
-function pressT(apx) {
-  const t = (apx && apx.timeStamp) ? apx.timeStamp : performance.now();
+// god oracle
+function pressT(ev) {
+  const t = (ev && ev.timeStamp) ? ev.timeStamp : performance.now();
   E.tsr_god_press(t * 1000);
-  refresh();
+  incRefresh();
 }
-$("pressBtn").onclick = function (ev) {
-  $("godOut").busy = false;
-  pressT(ev);
-  if (E.tsr_god_cnt() >= 17) $("godBtn").disabled = false;
-};
-// gestures anywhere count, exactly like a task-wide KbdMsEvtTime
+$("pressBtn").onclick = function (ev) { $("pressNote").textContent = ""; pressT(ev); };
 ["pointerup", "keydown"].forEach(function (ev) {
   document.addEventListener(ev, function (e) {
     const tag = (e.target && e.target.tagName) || "";
-    if (tag === "BUTTON" || tag === "INPUT") return; // dialogs below handle their own
+    if (tag === "BUTTON" || tag === "SELECT" || tag === "INPUT") return;
     pressT(e);
   }, true);
 });
-$("godBtn").onclick = function () {
-  $("godBtn").disabled = true;
-  $("godOut").busy = true;
-  $("godOut").textContent = "consulting...";
-  setTimeout(function () {
-    const b = E.tsr_god_bits(17);
-    if (b === -1n) {
-      $("pressNote").textContent = "the oracle is dry: PRESS OKAY again (TempleOS popped a dialog here)";
-      $('godOut').textContent = "\u00a0"; 
-      $("godOut").busy = false;
-      refresh();
+function oracleBits(need) {
+  const have = E.tsr_god_cnt();
+  $("pressNote").textContent = have >= need ? ""
+    : "the FIFO has " + have + "/" + need + " bits: PRESS OKAY " + Math.ceil((need - have) / 24) + " more time(s)";
+  return have >= need;
+}
+$("wordBtn").onclick = function () {
+  const words = sourceWords();
+  const b = E.tsr_god_bits(17);
+  if (b === -1n) { oracleBits(17); return; }
+  $("pressNote").textContent = "";
+  const w = words[Number(BigInt.asUintN(64, b) % BigInt(words.length))];
+  $("godOut").textContent = "god says: " + w;
+  $("verseOut").innerHTML = "";
+  incRefresh();
+};
+$("talkBtn").onclick = function () {
+  const words = sourceWords();
+  const nb = E.tsr_god_bits(2);
+  if (nb === -1n) { oracleBits(19); return; }
+  const n = 3 + Number(BigInt.asUintN(64, nb));
+  const draw = [];
+  for (let i = 0; i < n; i++) {
+    const w = E.tsr_god_bits(17);
+    if (w === -1n) {
+      $("pressNote").textContent = "still rising: PRESS OKAY (" + draw.length + "/" + n + " words so far)";
       return;
     }
-    const words = vocab;
-    const w = words[Number(BigInt.asUintN(64, b) % BigInt(words.length))];
-    $("godOut").textContent = "god says: " + w;
-    // like glossolalia: a longer blowout every few words
-    window.__wordCount = (window.__wordCount || 0) + 1;
-    refresh();
-  }, 120);
+    draw.push(words[Number(BigInt.asUintN(64, w) % BigInt(words.length))]);
+  }
+  $("pressNote").textContent = "";
+  $("godOut").textContent = "among " + draw.join(" ");
+  $("verseOut").innerHTML = "";
+  incRefresh();
 };
 
-// -- vocab: TempleOS Adam/God/Vocab.DD straight through ------------------------------------
-let vocab = [];
-try {
-  vocab = decodeURIComponent(escape(atob(VOCAB))).split("\n").filter(Boolean).map(function (s) {
-    return s.replace(/\r/, "");
-  });
-} catch (e) { vocab = ["word"]; }
+// KJV verse parsing (cached) - Terry's own Bible.TXT, split on the c:v inline markers
+let bibleVerses = null;
+function parseBible() {
+  if (bibleVerses) return bibleVerses;
+  const raw = b64str(BIBLE_B64).split("\n").map(function (s) { return s.replace(/\r$/, ""); });
+  const verses = [];
+  let book = -1, cur = null;
+  const flush = function () {
+    if (cur && cur.text.trim()) verses.push(cur);
+    cur = null;
+  };
+  for (const line of raw) {
+    if (!line.trim()) continue;
+    const parts = line.split(/(\d+:\d+) /);
+    for (let i = 0; i < parts.length; i++) {
+      const piece = parts[i];
+      if (i % 2 === 1) {
+        flush();
+        if (piece === "1:1") book += 1;
+        cur = { book: BIBLE_BOOKS[book] || "?", marker: piece, text: "" };
+      } else if (cur) {
+        cur.text += (cur.text ? " " : "") + piece;
+      }
+    }
+    if (cur) cur.text += " ";
+  }
+  flush();
+  bibleVerses = verses;
+  return verses;
+}
+function verseCount() {
+  const v = $("verseCountSel").value;
+  return v === "random" ? 1 + Math.floor(Math.random() * 4) : Number(v);
+}
+function pickLines(pool, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const b = E.tsr_god_bits(21);
+    if (b === -1n) return null;
+    out.push(Number(BigInt.asUintN(64, b) % BigInt(pool.length)));
+  }
+  return out;
+}
 
-refresh();
-$("stream").textContent = "click Draw, or consult the oracle";
+$("verseBtn").onclick = function () {
+  const n = verseCount();
+  const quotes = sourceQuotes();
+  const pool = quotes ? quotes : parseBible();
+  const title = quotes ? SRCS[srcIndex()].title : "KJV";
+  const idxs = pickLines(pool, n);
+  if (idxs === null) { oracleBits(n * 21); return; }
+  $("pressNote").textContent = "";
+  const blocks = [];
+  for (const i of idxs) {
+    if (quotes) {
+      blocks.push('<div class="quote">' + pool[i].t +
+        '<br><span class="cite">' + title + " &mdash; line " + pool[i].l + "</span></div>");
+    } else {
+      const v = pool[i];
+      blocks.push('<div class="quote">' + v.text.trim() +
+        '<br><span class="cite">' + v.book + " " + v.marker + " &mdash; line " + (i + 1) +
+        "</span></div>");
+    }
+  }
+  $("godOut").innerHTML = "&nbsp;";
+  $("verseOut").innerHTML = blocks.join("");
+  incRefresh();
+};
+
+incRefresh();
+$("stream").textContent = "click Draw, or press OKAY and consult the oracle";
 </script>
 </body>
 </html>
 """
-
-def main():
-    wasm = open(WASM, "rb").read()
-    vocab = open(VOCAB, "r", encoding="utf-8", errors="replace").read()
-    b64w = base64.b64encode(wasm).decode("ascii")
-    b64v = base64.b64encode(vocab.encode("utf-8")).decode("ascii")
-    html = TEMPLATE.replace("__WASM_B64__", b64w).replace("__VOCAB_B64__", b64v)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(html)
-    print("wrote %s (%.1f KB, %d words, wasm %d bytes)" % (
-        OUT, os.path.getsize(OUT) / 1024.0, len(vocab.split()), len(wasm)))
 
 if __name__ == "__main__":
     main()
