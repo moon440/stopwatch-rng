@@ -16,13 +16,18 @@ Gutenberg book shipped here carries its own minimal list and quotable-line sampl
 oracle speaks Plato, the Bhagavad Gītā, Pistis Sophia, Marcus Aurelius or Augustine —
 or the plain King James Bible, one to four verses per blow, in Terry's own Misc/Bible.TXT.
 
+The pastiche voice walks an order-4 Markov chain (backoff 3/2/1) built from the selected
+book's own word order, seeded by press latency and by your optional question text — no
+generative model, no network. Memory is a four-word window, the same FIFO spirit as
+Terry's oracle.
+
 ## What is in here
 
 | Path | What |
 |---|---|
 | `src/templeos_rng.zig` | The generator: Kernel `Rand` (LCG + TSC fold, `Seed(n)`/`Seed(0)` modes) and the `god` oracle bit-FIFO, in Zig. |
 | `build/wasm/templeos_rng.wasm` | Built artifact (not committed; produced by `tools/build.ps1`; 968 bytes). |
-| `demo/index.html` | The interactive demo: seed, draw, then consult the oracle — a word (17 bits), an AfterEgypt-style 3–7 word glossolalia burst, or verses from the King James Bible (1–4 at a time, or random) plus quotable lines from the attached Gutenberg books with line-numbered citations. Green TempleOS terminal, zero dependencies. |
+| `demo/index.html` | The interactive demo: seed, draw, then consult the oracle — a word (17 bits), a Markov pastiche (order 4, backoff 3/2/1) seeded by press latency, an AfterEgypt-style free sentence, or verses from the King James Bible (1–4 at a time, or random) plus quotable lines from the attached Gutenberg books with line-numbered citations. Optional question text biases the pastiche start position. Green TempleOS terminal, zero dependencies. |
 | `data/vocab.txt` | `Adam/God/Vocab.DD` from TempleOS, unchanged. |
 | `data/gutenberg/` | Gutenberg corpus: original files for reference, one minimal wordlist (`pg<id>_vocab.txt`) and quotable-line samples per work (`pg<id>_quotes.json` with original line numbers), `index.tsv`, and `bible_kjv.txt` (etext #10, the exact Bible Terry shipped). License, author and Gutenberg number of each work are recorded; all are public domain in the US. |
 | `tools/build.ps1` | Zig `build-exe` to `wasm32-freestanding`, `ReleaseSmall`. No bundler. |

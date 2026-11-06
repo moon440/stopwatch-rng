@@ -29,7 +29,7 @@ def main():
     srcs = [{"name": "TempleOS Vocab.DD (KJV words, Terry's list)",
              "data": b64(os.path.join(ROOT, "data", "vocab.txt")),
              "title": "TempleOS Vocab.DD",
-             "quotes": None}]
+             "quotes": None, "text": None}]
     for path in sorted(glob.glob(os.path.join(ROOT, "data", "gutenberg", "pg*_vocab.txt"))):
         pg = os.path.basename(path)[:-10]
         book = path[:-10] + ".txt"
@@ -44,10 +44,12 @@ def main():
             pass
         qpath = path[:-10] + "_quotes.json"
         qs = b64(qpath) if os.path.exists(qpath) else None
+        tb = b64(book) if os.path.exists(book) else None
         srcs.append({"name": "Gutenberg: %s" % title[:100],
                      "data": b64(path),
                      "title": title,
-                     "quotes": qs})
+                     "quotes": qs,
+                     "text": tb})
     srcs_json = json.dumps(srcs, ensure_ascii=False, separators=(",", ":"))
 
     html = (TEMPLATE
@@ -127,10 +129,14 @@ pre { margin:.2rem 0; white-space:pre-wrap; word-break:break-all; }
 <div class="panel">
   <label for="srcSel">word source:</label>
   <select id="srcSel"></select>
+<br>
+  <label for="voiceSel">voice:</label>
+  <select id="voiceSel"><option value="markov" selected>pastiche (markov n=4)</option><option value="free">free draw (afteregypt words)</option></select>
+  <input id="askBox" placeholder="ask the book anything" style="width:14rem" aria-label="question for oracle">
   <pre>bit bank: <span id="godBar"></span> <span id="godCnt">0</span> bits <span id="pressNote" class="status"></span></pre>
   <button id="pressBtn">PRESS OKAY</button>
   <button id="wordBtn" disabled>Word (17 bits)</button>
-  <button id="talkBtn" disabled>Sentence (3..7 words, AfterEgypt)</button>
+  <button id="talkBtn" disabled>Speak (pastiche / sentence)</button>
   <button id="verseBtn">Verses / Quotes</button>
   <label for="verseCountSel">lines </label>
   <select id="verseCountSel">
@@ -206,6 +212,14 @@ function sourceWords() {
   }
   return cache["w" + key];
 }
+function sourceText() {
+  const key = srcIndex();
+  if (!cache["t" + key]) {
+    const b = SRCS[key].text || BIBLE_B64;
+    cache["t" + key] = b64str(b);
+  }
+  return cache["t" + key];
+}
 function sourceQuotes() {
   const key = srcIndex();
   if (!SRCS[key].quotes) return null;
@@ -214,6 +228,117 @@ function sourceQuotes() {
   }
   return cache["q" + key];
 }
+
+// ---- Markov pastiche: order-4 engine with 3/2/1 backoff, built from the book text.
+// Memory = last-n window only. Transition choice consumes stopwatch bits (press latency).
+const markovCache = {};
+function buildMarkov(key, order, maxMaps) {
+  const ck = key + ":" + order;
+  if (markovCache[ck]) return markovCache[ck];
+  const raw = sourceText();
+  let bodyText = raw;
+  const st = raw.indexOf("START OF THE PROJECT GUTENBERG");
+  const en = raw.indexOf("END OF THE PROJECT GUTENBERG", st == -1 ? 0 : st);
+  if (st !== -1) {
+    const ls = raw.indexOf("\n", st);
+    bodyText = ls !== -1 ? raw.slice(ls + 1, en !== -1 ? en : undefined) : raw.slice(st, en !== -1 ? en : undefined);
+  } else if (en !== -1) bodyText = raw.slice(0, en);
+  const tokens = bodyText.split(/[\s_]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  const startsMap = [];
+  const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+  const tokensDb = tokens;
+  const ord = order;
+  const maps = [];
+  for (let o = 1; o <= ord; o++) maps[o] = new Map();
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const nx = tokens[i+1];
+    for (let o = 1; o <= ord; o++) {
+      if (i < o + 1) continue;
+      const k = tokens.slice(i - o + 1, i + 1).map(norm).join(" ");
+      const arr = maps[o].get(k);
+      if (arr) { if (arr.length < 32) arr.push(nx); }
+      else maps[o].set(k, [nx]);
+    }
+  }
+  const engine = { maps: maps, ord: ord, tokens: tokensDb };
+  markovCache[ck] = engine;
+  return engine;
+}
+function godPick(n) {
+  const b = E.tsr_god_bits(17);
+  if (b === -1n) return null;
+  return Number(BigInt.asUintN(64, b) % BigInt(n));
+}
+function questionSeed() {
+  const q = ($("askBox").value || "").trim();
+  if (!q) return 0;
+  let h = 0;
+  for (let i = 0; i < q.length; i++) h = (h * 31 + q.charCodeAt(i)) >>> 0;
+  return h;
+}
+function speakMarkov() {
+  const key = srcIndex();
+  const engine = buildMarkov(key, 4);
+  const qs = questionSeed();
+  const posPick = godPick(engine.tokens.length - 10);
+  if (posPick === null) { oracleBits(17); return; }
+  let pos = (posPick + qs) % Math.max(1, engine.tokens.length - 10);
+  const out = engine.tokens.slice(pos, pos + 4);
+  const want = 22 + (qs % 14); // 22..35 words
+  const maxSteps = want + 60;
+  let dry = false;
+  const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+  while (out.length < want && out.length < maxSteps) {
+    let chosen = null;
+    for (let o = engine.ord; o >= 1 && !chosen; o--) {
+      if (out.length < o) continue;
+      const k = out.slice(out.length - o).map(norm).join(" ");
+      const arr = engine.maps[o].get(k);
+      if (arr && arr.length) {
+        const pick = godPick(arr.length);
+        if (pick === null) { dry = true; break; }
+        chosen = arr[pick];
+      }
+    }
+    if (dry) break;
+    if (!chosen) {
+      const p2 = godPick(engine.tokens.length - 1);
+      if (p2 === null) { dry = true; break; }
+      chosen = engine.tokens[p2];
+    }
+    out.push(chosen);
+  }
+  if (dry) { $("pressNote").textContent = "still rising: PRESS OKAY (" + out.length + " words banked)"; return; }
+  $("pressNote").textContent = "";
+  let sentence = out.join(" ");
+  sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+  if (!/[.!?]$/.test(sentence)) sentence += ".";
+  $("godOut").textContent = sentence;
+  $("verseOut").innerHTML = "";
+  incRefresh();
+}
+function speakFree() {
+  const words = sourceWords();
+  const nb = E.tsr_god_bits(2);
+  if (nb === -1n) { oracleBits(19); return; }
+  const n = 3 + Number(BigInt.asUintN(64, nb));
+  const draw = [];
+  for (let i = 0; i < n; i++) {
+    const w = E.tsr_god_bits(17);
+    if (w === -1n) {
+      $("pressNote").textContent = "still rising: PRESS OKAY (" + draw.length + "/" + n + " words so far)";
+      return;
+    }
+    draw.push(words[Number(BigInt.asUintN(64, w) % BigInt(words.length))]);
+  }
+  $("pressNote").textContent = "";
+  $("godOut").textContent = draw.join(" ");
+  $("verseOut").innerHTML = "";
+  incRefresh();
+}
+$("talkBtn").onclick = function () {
+  if ($("voiceSel").value === "markov") speakMarkov(); else speakFree();
+};
 
 // console basics
 let streamBuf = [];
@@ -282,25 +407,6 @@ $("wordBtn").onclick = function () {
   $("pressNote").textContent = "";
   const w = words[Number(BigInt.asUintN(64, b) % BigInt(words.length))];
   $("godOut").textContent = "god says: " + w;
-  $("verseOut").innerHTML = "";
-  incRefresh();
-};
-$("talkBtn").onclick = function () {
-  const words = sourceWords();
-  const nb = E.tsr_god_bits(2);
-  if (nb === -1n) { oracleBits(19); return; }
-  const n = 3 + Number(BigInt.asUintN(64, nb));
-  const draw = [];
-  for (let i = 0; i < n; i++) {
-    const w = E.tsr_god_bits(17);
-    if (w === -1n) {
-      $("pressNote").textContent = "still rising: PRESS OKAY (" + draw.length + "/" + n + " words so far)";
-      return;
-    }
-    draw.push(words[Number(BigInt.asUintN(64, w) % BigInt(words.length))]);
-  }
-  $("pressNote").textContent = "";
-  $("godOut").textContent = draw.join(" ");
   $("verseOut").innerHTML = "";
   incRefresh();
 };
