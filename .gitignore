@@ -1,0 +1,5 @@
+# no toolchains, no build outputs, nothing that is not source
+tools/zig/
+build/
+*.o
+node_modules/
