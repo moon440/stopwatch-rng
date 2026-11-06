@@ -132,12 +132,15 @@ pre { margin:.2rem 0; white-space:pre-wrap; word-break:break-all; }
 <br>
   <label for="voiceSel">voice:</label>
   <select id="voiceSel"><option value="markov" selected>pastiche (markov n=4)</option><option value="free">free draw (afteregypt words)</option></select>
+  <button id="preBtn">prebuild chain</button>
   <input id="askBox" placeholder="ask the book anything" style="width:14rem" aria-label="question for oracle">
   <pre>bit bank: <span id="godBar"></span> <span id="godCnt">0</span> bits <span id="pressNote" class="status"></span></pre>
   <button id="pressBtn">PRESS OKAY</button>
   <button id="wordBtn" disabled>Word (17 bits)</button>
   <button id="talkBtn" disabled>Speak (pastiche / sentence)</button>
+  <span id="talkNeed" class="status" style="margin-left:.4rem"></span>
   <button id="verseBtn">Verses / Quotes</button>
+  <button id="autoBtn">bank +96 bits</button>
   <label for="verseCountSel">lines </label>
   <select id="verseCountSel">
     <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="random">random 1-4</option>
@@ -229,10 +232,10 @@ function sourceQuotes() {
   return cache["q" + key];
 }
 
-// ---- Markov pastiche: order-4 engine with 3/2/1 backoff, built from the book text.
+// ---- Markov pastiche: order-2 engine with 1/0 backoff, built from the book text.
 // Memory = last-n window only. Transition choice consumes stopwatch bits (press latency).
 const markovCache = {};
-function buildMarkov(key, order, maxMaps) {
+function buildMarkov(key, order) {
   const ck = key + ":" + order;
   if (markovCache[ck]) return markovCache[ck];
   const raw = sourceText();
@@ -243,24 +246,24 @@ function buildMarkov(key, order, maxMaps) {
     const ls = raw.indexOf("\n", st);
     bodyText = ls !== -1 ? raw.slice(ls + 1, en !== -1 ? en : undefined) : raw.slice(st, en !== -1 ? en : undefined);
   } else if (en !== -1) bodyText = raw.slice(0, en);
-  const tokens = bodyText.split(/[\s_]+/).map(function(s){ return s.trim(); }).filter(Boolean);
-  const startsMap = [];
+  const tokens = bodyText.split(/[\s_]+/).map(function(s){ return s.trim(); }).filter(function(s){
+    return s.length > 0 && /[a-zA-Z]/.test(s);
+  });
   const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-  const tokensDb = tokens;
   const ord = order;
   const maps = [];
   for (let o = 1; o <= ord; o++) maps[o] = new Map();
   for (let i = 0; i < tokens.length - 1; i++) {
     const nx = tokens[i+1];
     for (let o = 1; o <= ord; o++) {
-      if (i < o + 1) continue;
-      const k = tokens.slice(i - o + 1, i + 1).map(norm).join(" ");
+      if (i < o) continue;
+      const k = tokens.slice(i - o, i + 1).map(norm).join(" ");
       const arr = maps[o].get(k);
-      if (arr) { if (arr.length < 32) arr.push(nx); }
+      if (arr) { if (arr.length < 64) arr.push(nx); }
       else maps[o].set(k, [nx]);
     }
   }
-  const engine = { maps: maps, ord: ord, tokens: tokensDb };
+  const engine = { maps: maps, ord: ord, tokens: tokens };
   markovCache[ck] = engine;
   return engine;
 }
@@ -278,29 +281,55 @@ function questionSeed() {
 }
 function speakMarkov() {
   const key = srcIndex();
-  const engine = buildMarkov(key, 4);
+  if (E.tsr_god_cnt() < 200) bank(4);
+  const ck = key + ":2";
+  if (!markovCache[ck]) { $("pressNote").textContent = "building order-2 chain from book text (first Speak on this source takes a few seconds)..."; }
+  const engine = buildMarkov(key, 2);
+  $("pressNote").textContent = "";
   const qs = questionSeed();
-  const posPick = godPick(engine.tokens.length - 10);
-  if (posPick === null) { oracleBits(17); return; }
-  let pos = (posPick + qs) % Math.max(1, engine.tokens.length - 10);
-  const out = engine.tokens.slice(pos, pos + 4);
-  const want = 22 + (qs % 14); // 22..35 words
-  const maxSteps = want + 60;
+  // keyword anchoring: seed near a fragment containing the question's content words
+  const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+  const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+  let pos = null;
+  if (qWords.length && engine.tokens) {
+    const hits = [];
+    for (let i = 0; i < engine.tokens.length - 8; i++) {
+      const frag = engine.tokens.slice(i, i + 8).map(norm0).join(" ");
+      for (const w of qWords) if (frag.indexOf(w) !== -1) { hits.push(i); break; }
+    }
+    if (hits.length) {
+      const pick = godPick(hits.length);
+      if (pick !== null) pos = hits[pick];
+    }
+  }
+  if (pos === null) pos = godPick(engine.tokens.length - 10);
+  if (pos === null) { oracleBits(17); return; }
+  const out = [engine.tokens[pos]];
+  const want = 12 + (qs % 12); // 12..23 words
+  const maxSteps = want + 40;
   let dry = false;
   const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
   while (out.length < want && out.length < maxSteps) {
     let chosen = null;
-    for (let o = engine.ord; o >= 1 && !chosen; o--) {
-      if (out.length < o) continue;
-      const k = out.slice(out.length - o).map(norm).join(" ");
-      const arr = engine.maps[o].get(k);
-      if (arr && arr.length) {
-        const pick = godPick(arr.length);
+    // order-2 first, then order-1 fallback
+    if (out.length >= 2) {
+      const k2 = out.slice(out.length - 2).map(norm).join(" ");
+      const a2 = engine.maps[2].get(k2);
+      if (a2 && a2.length) {
+        const pick = godPick(a2.length);
         if (pick === null) { dry = true; break; }
-        chosen = arr[pick];
+        chosen = a2[pick];
       }
     }
-    if (dry) break;
+    if (!chosen && out.length >= 1) {
+      const k1 = out.slice(out.length - 1).map(norm).join(" ");
+      const a1 = engine.maps[1].get(k1);
+      if (a1 && a1.length) {
+        const pick = godPick(a1.length);
+        if (pick === null) { dry = true; break; }
+        chosen = a1[pick];
+      }
+    }
     if (!chosen) {
       const p2 = godPick(engine.tokens.length - 1);
       if (p2 === null) { dry = true; break; }
@@ -356,8 +385,21 @@ function incRefresh() {
   $("godBar").innerHTML = bar;
   const have = E.tsr_god_cnt() >= 17;
   $("wordBtn").disabled = !have;
-  $("talkBtn").disabled = !have;
+  $("talkBtn").disabled = false;
+  const bankBits = E.tsr_god_cnt();
+  $("talkNeed").textContent = bankBits >= 200 ? "(ready: " + bankBits + " bits banked)"
+    : "will self-bank 4 presses (" + bankBits + "/200 bits)";
 }
+function bank(n) { for (let i = 0; i < n; i++) E.tsr_god_press(performance.now() * 1000 + i); incRefresh(); }
+$("autoBtn").onclick = function () { bank(4); };
+$("preBtn").onclick = function () {
+  const key = srcIndex();
+  const ck = key + ":2";
+  if (markovCache[ck]) { $("pressNote").textContent = "chain already built for this source"; return; }
+  $("pressNote").textContent = "building order-2 chain from book text... this takes a few seconds";
+  buildMarkov(key, 2);
+  $("pressNote").textContent = "chain ready (" + markovCache[ck].tokens.length + " tokens)";
+};
 function drawOnce() {
   const now = performance.now() * 1000;
   $("tscStep").textContent = Math.round(now - lastT) + " us";
