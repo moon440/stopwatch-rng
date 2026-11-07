@@ -199,7 +199,7 @@ function buildMarkov(key, order) {
       const nx = tokens[i+1];
       for (let o = 1; o <= ord; o++) {
         if (i < o) continue;
-        const k = tokens.slice(i - o, i + 1).map(norm).join(" ");
+        const k = tokens.slice(i - o + 1, i + 1).map(norm).join(" ");
         const arr = maps[o].get(k);
         if (arr) { if (arr.length < 64) arr.push(nx); }
         else maps[o].set(k, [nx]);
@@ -230,37 +230,93 @@ function speakMarkov() {
   const engine = buildMarkov(key, 2);
   $("pressNote").textContent = "";
   const qs = questionSeed();
-  // keyword anchoring: find sentences containing question words, start near there
-  const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+
+  if (engine.sentTokens && engine.sentTokens.length > 0) {
+    // sentence-based mode: pick a sentence, walk Markov within it
+    const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+    const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+    let sentIdx = null;
+    if (qWords.length) {
+      const hits = [];
+      for (let si = 0; si < engine.sentTokens.length; si++) {
+        const frag = engine.sentTokens[si].map(norm0).join(" ");
+        for (const w of qWords) if (frag.indexOf(w) !== -1) { hits.push(si); break; }
+      }
+      if (hits.length) {
+        const pick = godPick(hits.length);
+        if (pick !== null) sentIdx = hits[pick];
+      }
+    }
+    if (sentIdx === null) sentIdx = godPick(engine.sentTokens.length);
+    if (sentIdx === null) { oracleBits(17); return; }
+    const walkTokens = engine.sentTokens[sentIdx];
+    const out = [walkTokens[0]];
+    const want = 10 + (qs % 16);
+    const maxSteps = want + 30;
+    const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+    for (let i = 1; i < walkTokens.length && out.length < want && out.length < maxSteps; i++) {
+      let chosen = null;
+      if (out.length >= 2) {
+        const k2 = out.slice(out.length - 2).map(norm).join(" ");
+        const a2 = engine.maps[2].get(k2);
+        if (a2 && a2.length) {
+          const pick = godPick(a2.length);
+          if (pick === null) break;
+          chosen = a2[pick];
+        }
+      }
+      if (!chosen && out.length >= 1) {
+        const k1 = out.slice(out.length - 1).map(norm).join(" ");
+        const a1 = engine.maps[1].get(k1);
+        if (a1 && a1.length) {
+          const pick = godPick(a1.length);
+          if (pick === null) break;
+          chosen = a1[pick];
+        }
+      }
+      if (!chosen) break;
+      out.push(chosen);
+    }
+    if (out.length < 3) { $("pressNote").textContent = "chain too short: PRESS OKAY again"; return; }
+    $("pressNote").textContent = "";
+    let sentence = out.join(" ");
+    sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+    if (!/[.!?]$/.test(sentence)) sentence += ".";
+    $("godOut").textContent = sentence;
+    $("verseOut").innerHTML = "";
+    incRefresh();
+    return;
+  }
+
+  // token-based fallback (no sentences in source, e.g. Vocab.DD)
   const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-  let sentIdx = null;
-  if (qWords.length && engine.sentTokens) {
+  const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+  let pos = null;
+  if (qWords.length && engine.tokens) {
     const hits = [];
-    for (let si = 0; si < engine.sentTokens.length; si++) {
-      const frag = engine.sentTokens[si].map(norm0).join(" ");
-      for (const w of qWords) if (frag.indexOf(w) !== -1) { hits.push(si); break; }
+    for (let i = 0; i < engine.tokens.length - 8; i++) {
+      const frag = engine.tokens.slice(i, i + 8).map(norm0).join(" ");
+      for (const w of qWords) if (frag.indexOf(w) !== -1) { hits.push(i); break; }
     }
     if (hits.length) {
       const pick = godPick(hits.length);
-      if (pick !== null) sentIdx = hits[pick];
+      if (pick !== null) pos = hits[pick];
     }
   }
-  if (sentIdx === null) sentIdx = godPick(engine.sentTokens.length);
-  if (sentIdx === null) { oracleBits(17); return; }
-  const walkTokens = engine.sentTokens[sentIdx];
-  const out = [walkTokens[0]];
-  const want = 10 + (qs % 16); // 10..25 words
+  if (pos === null) pos = godPick(engine.tokens.length - 10);
+  if (pos === null) { oracleBits(17); return; }
+  const out = [engine.tokens[pos]];
+  const want = 10 + (qs % 16);
   const maxSteps = want + 30;
-  let dry = false;
   const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-  for (let i = 1; i < walkTokens.length && out.length < want && out.length < maxSteps; i++) {
+  while (out.length < want && out.length < maxSteps) {
     let chosen = null;
     if (out.length >= 2) {
       const k2 = out.slice(out.length - 2).map(norm).join(" ");
       const a2 = engine.maps[2].get(k2);
       if (a2 && a2.length) {
         const pick = godPick(a2.length);
-        if (pick === null) { dry = true; break; }
+        if (pick === null) break;
         chosen = a2[pick];
       }
     }
@@ -269,7 +325,7 @@ function speakMarkov() {
       const a1 = engine.maps[1].get(k1);
       if (a1 && a1.length) {
         const pick = godPick(a1.length);
-        if (pick === null) { dry = true; break; }
+        if (pick === null) break;
         chosen = a1[pick];
       }
     }
