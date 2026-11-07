@@ -65,7 +65,7 @@ pre { margin:.2rem 0; white-space:pre-wrap; word-break:break-all; }
   <select id="srcSel"></select>
 <br>
   <label for="voiceSel">voice:</label>
-  <select id="voiceSel"><option value="markov" selected>pastiche (markov n=4)</option><option value="free">free draw (afteregypt words)</option></select>
+  <select id="voiceSel"><option value="markov" selected>pastiche (markov n=2 sentence-chain)</option><option value="free">free draw (afteregypt words)</option></select>
   <button id="preBtn">prebuild chain</button>
   <input id="askBox" placeholder="ask the book anything" style="width:14rem" aria-label="question for oracle">
   <pre>bit bank: <span id="godBar"></span> <span id="godCnt">0</span> bits <span id="pressNote" class="status"></span></pre>
@@ -166,8 +166,9 @@ function sourceQuotes() {
   return cache["q" + key];
 }
 
-// ---- Markov pastiche: order-2 engine with weighted transitions, built from the book text.
-// Splits text into sentences, builds transitions WITHIN sentences only, weights by frequency.
+// ---- Markov pastiche: sentence-boundary aware, weighted transitions, keyword anchoring.
+// Splits text into real sentences, chains sentences whose end word matches next start word.
+// Every output word is real text from the book in real context. Randomness = sentence choice + chaining.
 // Memory = last-n window only. Transition choice consumes stopwatch bits (press latency).
 const markovCache = {};
 function buildMarkov(key, order) {
@@ -192,9 +193,11 @@ function buildMarkov(key, order) {
   const maps = [];
   for (let o = 1; o <= ord; o++) maps[o] = new Map();
   const starts = []; // sentence-start tokens for seeding
+  const ends = [];   // sentence-end tokens for chaining
   for (let si = 0; si < sentTokens.length; si++) {
     const tokens = sentTokens[si];
     starts.push(tokens[0]);
+    ends.push(tokens[tokens.length - 1]);
     for (let i = 0; i < tokens.length - 1; i++) {
       const nx = tokens[i+1];
       for (let o = 1; o <= ord; o++) {
@@ -206,7 +209,19 @@ function buildMarkov(key, order) {
       }
     }
   }
-  const engine = { maps: maps, ord: ord, starts: starts, sentTokens: sentTokens };
+  // index sentences by first and last word (normalized) for chaining
+  const firstWordIndex = new Map(); // normalized first word -> sentence indices
+  const lastWordIndex = new Map();  // normalized last word -> sentence indices
+  for (let si = 0; si < sentTokens.length; si++) {
+    const toks = sentTokens[si];
+    const fw = norm(toks[0]);
+    const lw = norm(toks[toks.length - 1]);
+    if (!firstWordIndex.has(fw)) firstWordIndex.set(fw, []);
+    firstWordIndex.get(fw).push(si);
+    if (!lastWordIndex.has(lw)) lastWordIndex.set(lw, []);
+    lastWordIndex.get(lw).push(si);
+  }
+  const engine = { maps: maps, ord: ord, starts: starts, ends: ends, sentTokens: sentTokens, firstWordIndex, lastWordIndex };
   markovCache[ck] = engine;
   return engine;
 }
@@ -231,10 +246,13 @@ function speakMarkov() {
   $("pressNote").textContent = "";
   const qs = questionSeed();
 
+  const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+  const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
+  const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+
+  // --- sentence-based mode: walk real sentences chained by shared boundary word ---
   if (engine.sentTokens && engine.sentTokens.length > 0) {
-    // sentence-based mode: pick a sentence, walk Markov within it
-    const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-    const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
+    // pick starting sentence: keyword-anchored if possible, else random
     let sentIdx = null;
     if (qWords.length) {
       const hits = [];
@@ -249,48 +267,40 @@ function speakMarkov() {
     }
     if (sentIdx === null) sentIdx = godPick(engine.sentTokens.length);
     if (sentIdx === null) { oracleBits(17); return; }
-    const walkTokens = engine.sentTokens[sentIdx];
-    const out = [walkTokens[0]];
-    const want = 10 + (qs % 16);
-    const maxSteps = want + 30;
-    const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-    for (let i = 1; i < walkTokens.length && out.length < want && out.length < maxSteps; i++) {
-      let chosen = null;
-      if (out.length >= 2) {
-        const k2 = out.slice(out.length - 2).map(norm).join(" ");
-        const a2 = engine.maps[2].get(k2);
-        if (a2 && a2.length) {
-          const pick = godPick(a2.length);
-          if (pick === null) break;
-          chosen = a2[pick];
-        }
+
+    const outSents = [];
+    let curIdx = sentIdx;
+    let used = new Set();
+    used.add(curIdx);
+    // chain up to 4 sentences: next sentence starts with same word as current ends
+    for (let chain = 0; chain < 3; chain++) {
+      const curTokens = engine.sentTokens[curIdx];
+      const lastWord = norm(curTokens[curTokens.length - 1]);
+      const candidates = engine.lastWordIndex.get(lastWord);
+      let nextIdx = null;
+      if (candidates && candidates.length > 0) {
+        // prefer a candidate not already used
+        let fresh = candidates.filter(function(i){ return !used.has(i); });
+        if (fresh.length === 0) fresh = candidates;
+        const pick = godPick(fresh.length);
+        if (pick !== null) nextIdx = fresh[pick];
       }
-      if (!chosen && out.length >= 1) {
-        const k1 = out.slice(out.length - 1).map(norm).join(" ");
-        const a1 = engine.maps[1].get(k1);
-        if (a1 && a1.length) {
-          const pick = godPick(a1.length);
-          if (pick === null) break;
-          chosen = a1[pick];
-        }
-      }
-      if (!chosen) break;
-      out.push(chosen);
+      if (nextIdx === null) break;
+      outSents.push(curIdx);
+      curIdx = nextIdx;
+      used.add(curIdx);
     }
-    if (out.length < 3) { $("pressNote").textContent = "chain too short: PRESS OKAY again"; return; }
+    outSents.push(curIdx);
+
+    const out = outSents.map(function(si){ return engine.sentTokens[si].join(" "); }).join(" ");
     $("pressNote").textContent = "";
-    let sentence = out.join(" ");
-    sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
-    if (!/[.!?]$/.test(sentence)) sentence += ".";
-    $("godOut").textContent = sentence;
+    $("godOut").textContent = out;
     $("verseOut").innerHTML = "";
     incRefresh();
     return;
   }
 
   // token-based fallback (no sentences in source, e.g. Vocab.DD)
-  const norm0 = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
-  const qWords = ($("askBox").value || "").toLowerCase().replace(/[^a-z' ]+/g, " ").split(/\s+/).filter(function(w){ return w.length >= 4 && !["what","this","that","with","from","where","isnt","is","are","was","were","did","does","have","has","the","and","for","who"].includes(w); });
   let pos = null;
   if (qWords.length && engine.tokens) {
     const hits = [];
@@ -308,7 +318,6 @@ function speakMarkov() {
   const out = [engine.tokens[pos]];
   const want = 10 + (qs % 16);
   const maxSteps = want + 30;
-  const norm = (w) => w.toLowerCase().replace(/[^a-z']+/g, "");
   while (out.length < want && out.length < maxSteps) {
     let chosen = null;
     if (out.length >= 2) {
